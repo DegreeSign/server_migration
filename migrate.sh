@@ -140,24 +140,18 @@ ssh "$OLD_SERVER" cp -a ~/.pm2/dump.pm2 "$REMOTE_TMP/pm2/" 2>/dev/null || true
 
 # Capture global npm packages
 echo ""
-echo 'Capturing npm packages...'
-FINAL_FILE="$REMOTE_TMP/npm-packages.json"
+echo "Capturing npm packages..."
+GLOBAL_PKGS="$REMOTE_TMP/npm-global-packages.json"
+ROOT_PKGS="$REMOTE_TMP/npm-root-packages.json"
 ssh "$OLD_SERVER" mkdir -p "$REMOTE_TMP"
-ssh "$OLD_SERVER" "printf '{\"dependencies\":{}}' > \"$FINAL_FILE\""
-ssh "$OLD_SERVER" npm ls -g --depth=0 --json 2>/dev/null \
-    > "$FINAL_FILE.tmp" || true
-ssh "$OLD_SERVER" test -s "$FINAL_FILE.tmp" && \
-    ssh "$OLD_SERVER" mv "$FINAL_FILE.tmp" "$FINAL_FILE" || \
-    ssh "$OLD_SERVER" rm -f "$FINAL_FILE.tmp"
-ssh "$OLD_SERVER" test -f /root/package.json && \
-    ssh "$OLD_SERVER" bash -c "cd /root && \
-    npm ls --depth=0 --json 2>/dev/null" > "$FINAL_FILE.tmp" || true
-ssh "$OLD_SERVER" test -s "$FINAL_FILE.tmp" && \
-    ssh "$OLD_SERVER" jq -s '.[0].dependencies * .[1].dependencies' \
-        "$FINAL_FILE" "$FINAL_FILE.tmp" > "$FINAL_FILE.new" && \
-    ssh "$OLD_SERVER" mv "$FINAL_FILE.new" "$FINAL_FILE"
-ssh "$OLD_SERVER" rm -f "$FINAL_FILE.tmp"
-echo 'All npm packages captured successfully'
+ssh "$OLD_SERVER" sh -c "npm ls -g --depth=0 --json > \"$GLOBAL_PKGS\" 2>/dev/null || \
+    echo '{\"dependencies\":{}}' > \"$GLOBAL_PKGS\""
+if ssh "$OLD_SERVER" test -f /root/package.json; then
+    ssh "$OLD_SERVER" sh -c "cd /root && npm ls --depth=0 --json \
+        > \"$ROOT_PKGS\" 2>/dev/null || echo '{\"dependencies\":{}}' > \"$ROOT_PKGS\""
+else
+    ssh "$OLD_SERVER" echo '{\"dependencies\":{}}' > "$ROOT_PKGS"
+fi
 
 # Compression process
 echo -e "\nBundling data in $REMOTE_TMP ..."
@@ -240,9 +234,12 @@ EOF
 # 9. Install npm packages
 # -----------------------------------------------------------------------------
 stage $((++CURRENT)) $TOTAL_STAGES "Reinstalling npm packages"
-ssh "$NEW_SERVER" bash -c '
-  jq -r ".dependencies | keys[]" "'"$REMOTE_TMP/npm-packages.json"'" 2>/dev/null |
-  xargs -r -I {} sudo npm i -g {} --unsafe-perm=true || true'
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-global-packages.json\" | \
+    xargs -r sudo npm i -g --unsafe-perm"
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-root-packages.json\" | \
+    xargs -r sudo npm i -g --unsafe-perm"
 
 # -----------------------------------------------------------------------------
 # 10. Restore PM2 processes
