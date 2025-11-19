@@ -36,14 +36,14 @@ IMPORTANT:
 
 ```env
 # SSH details
-OLD_USER=old_username
-OLD_IP=0.0.0.0
-NEW_USER=new_username
-NEW_IP=1.1.1.1
+OLD_USER='old_username'
+OLD_IP='0.0.0.0'
+NEW_USER='new_username'
+NEW_IP='1.1.1.1'
 
 # Comma-separated – no spaces after commas
-MIGRATE_DIRS=/root/pm2_files,/var/www,/etc/letsencrypt
-MIGRATE_FILES=/etc/apache2/apache2.conf,/etc/ssh/sshd_config
+MIGRATE_DIRS='/root/pm2_files,/var/www,/etc/letsencrypt'
+MIGRATE_FILES='/etc/apache2/apache2.conf,/etc/ssh/sshd_config'
 ```
 ## Run
 Run the migration
