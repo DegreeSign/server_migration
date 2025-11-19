@@ -15,17 +15,17 @@ License: Apache-2.0 [LICENSE](LICENSE)
 ### Directory Setup
 
 ```bash
-# Create and enter your migration project folder
-mkdir tmp_migration && cd tmp_migration
+# Install migration package
+yarn add @degreesign/migrate
 
-# Initialize a Yarn project (creates package.json)
-yarn init -y
+# Create migration folder
+mkdir -p tmp_migration
 
-# Install the migration tool locally
-yarn add server_migration
+# Copy example env config
+cp node_modules/@degreesign/migrate/.env.example ./tmp_migration/.env
 
-# Copy the example config and edit it
-cp node_modules/@degreesign/migrate/.env.example .env
+# Open tmp_migration
+cd tmp_migration
 ```
 
 ### Configuration Setup
@@ -49,7 +49,7 @@ MIGRATE_FILES=/etc/apache2/apache2.conf,/etc/ssh/sshd_config
 Run the migration
 
 ```bash
-yarn migrate
+npx @degreesign/migrate
 ```
 
 ## Features
