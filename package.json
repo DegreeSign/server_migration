@@ -1,6 +1,6 @@
 {
     "name": "@degreesign/migrate",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "description": "One-command server migration for Apache + PM2 Ubuntu/Debian servers",
     "main": "migrate.sh",
     "bin": {
