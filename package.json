@@ -1,0 +1,36 @@
+{
+    "name": "@degreesign/migrate",
+    "version": "1.0.0",
+    "description": "One-command server migration for Apache + PM2 Ubuntu/Debian servers",
+    "main": "migrate.sh",
+    "bin": {
+        "server-migration": "./migrate.sh"
+    },
+    "scripts": {
+        "migrate": "chmod +x migrate.sh && ./migrate.sh"
+    },
+    "files": [
+        "migrate.sh",
+        ".env.example",
+        "LICENSE",
+        "README.md"
+    ],
+    "keywords": [
+        "server migration",
+        "apache2",
+        "pm2",
+        "nodejs",
+        "devops",
+        "ubuntu"
+    ],
+    "author": "DegreeSign",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/DegreeSign/server_migration#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/DegreeSign/server_migration.git"
+    },
+    "bugs": {
+        "url": "https://github.com/DegreeSign/server_migration/issues"
+    }
+}
