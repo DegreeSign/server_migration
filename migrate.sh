@@ -57,10 +57,10 @@ done
 
 # Ensure MIGRATE_* arrays are not empty comma lists
 [[ "$MIGRATE_DIRS"  =~ ^,+$ ]]  && {
-  echo -e "\n\033[1;31mERROR: MIGRATE_DIRS cannot be empty\033[0m";  exit 1;
+  echo -e "\n\033[1;31mERROR: MIGRATE_DIRS cannot be empty\033[0m" &&  exit 1
 }
 [[ "$MIGRATE_FILES" =~ ^,+$ ]]  && {
-  echo -e "\n\033[1;31mERROR: MIGRATE_FILES cannot be empty\033[0m"; exit 1;
+  echo -e "\n\033[1;31mERROR: MIGRATE_FILES cannot be empty\033[0m" && exit 1
 }
 
 OLD_SERVER="${OLD_USER}@${OLD_IP}"
@@ -81,7 +81,7 @@ declare -A dirs
 for i in "${!DIR_LIST[@]}"; do
   src="${DIR_LIST[$i]}"
   [[ "$src" = "/" || "$src" = "/home" || "$src" = "/etc" || "$src" = "/root" ]] && {
-    echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m"; exit 1;
+    echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m" && exit 1
   }
   dirs["$src"]="dir_$i"
 done
@@ -90,7 +90,7 @@ declare -A files
 for i in "${!FILE_LIST[@]}"; do
   src="${FILE_LIST[$i]}"
   [[ "$src" = "/" || "$src" = "/root" ]] && {
-    echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m"; exit 1;
+    echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m" && exit 1
   }
   files["$src"]=$(basename "$src")
 done
@@ -116,12 +116,12 @@ ssh "$OLD_SERVER" bash -c "\
     done) \
   $(for src in \"${!files[@]}\"; do \
       dest=\"${files[$src]}\"; \
-      echo \"cp -a \\\"$src\\\" \\\"$REMOTE_TMP/\$dest\\\" && \"; \
+      echo \"cp -a \\\"$src\\\" \\\"$REMOTE_TMP/\$dest\\\" || true && \"; \
     done) \
-  cp ~/.pm2/dump.pm2 $REMOTE_TMP/pm2/dump.pm2 2>/dev/null || true && \
-  (npm ls -g --depth=0 --json > $REMOTE_TMP/global-packages.json 2>/dev/null \\
-    || echo '{\"dependencies\":{}}' > $REMOTE_TMP/global-packages.json) && \
-  tar --numeric-owner -czf /tmp/$BUNDLE -C $REMOTE_TMP ."
+  cp -a ~/.pm2/dump.pm2 \"$REMOTE_TMP/pm2/dump.pm2\" 2>/dev/null || true && \
+  (npm ls -g --depth=0 --json > \"$REMOTE_TMP/global-packages.json\" 2>/dev/null \\
+    || echo '{\"dependencies\":{}}' > \"$REMOTE_TMP/global-packages.json\") && \
+  tar --numeric-owner -czf /tmp/$BUNDLE -C \"$REMOTE_TMP\" ."
 
 stage $((++CURRENT)) $TOTAL_STAGES "Creating local backup"
 scp -q "$OLD_SERVER":/tmp/$BUNDLE "$LOCAL_DIR/"
@@ -148,11 +148,11 @@ ssh "$NEW_SERVER" sudo bash -c "\
   $(for src in \"${!dirs[@]}\"; do \
       dest=\"${dirs[$src]}\"; \
       echo \"rsync -aHAX --delete --numeric-ids \\\"$REMOTE_TMP/\$dest/\\\" \\
-      \\\"$src/\\\" && \"; \
+      \\\"$src/\\\" || true && \"; \
     done) \
   $(for src in \"${!files[@]}\"; do \
       dest=\"${files[$src]}\"; \
-      echo \"cp -a \\\"$REMOTE_TMP/\$dest\\\" \\\"$src\\\" && \"; \
+      echo \"cp -a \\\"$REMOTE_TMP/\$dest\\\" \\\"$src\\\" || true && \"; \
     done) \
   systemctl restart apache2 || true"
 
