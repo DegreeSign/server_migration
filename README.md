@@ -1,6 +1,6 @@
-# DegreeSign | Apache + PM2 Server Migration Tool
+# DegreeSign | Apache + PM2 Server Migration
 
-One-command server migration for Ubuntu/Debian servers running Apache + PM2 + Node.js apps.
+One-command migration for Ubuntu servers running Apache + PM2 + Node.js apps
 
 Migrates everything safely and exactly:
 - Apache config
@@ -9,7 +9,7 @@ Migrates everything safely and exactly:
 - PM2 apps (original paths preserved via `dump.pm2`)
 - Global npm packages
 
-License: Apache-2.0 [LICENSE]
+License: Apache-2.0 [LICENSE](LICENSE)
 
 ## Project Setup
 ### Directory Setup
@@ -29,7 +29,7 @@ cp node_modules/@degreesign/migrate/.env.example .env
 ```
 
 ### Configuration Setup
-Edit .env with your server details and paths
+Edit [.env](.env.example) with your server details and paths
 IMPORTANT:
 * FOLLOWING DETAILS ARE JUST PLACEHOLDERS
 * REVIEW AND UPDATE REQUIRED BEFORE USE
