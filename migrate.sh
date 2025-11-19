@@ -72,12 +72,14 @@ IFS=',' read -ra FILE_LIST <<< "$MIGRATE_FILES"
 declare -A dirs
 for i in "${!DIR_LIST[@]}"; do
   src="${DIR_LIST[$i]}"
+  [[ "$src" = "/" || "$src" = "/home" || "$src" = "/etc" || "$src" = "/root" ]] && { echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m"; exit 1; }
   dirs["$src"]="dir_$i"
 done
 
 declare -A files
 for i in "${!FILE_LIST[@]}"; do
   src="${FILE_LIST[$i]}"
+  [[ "$src" = "/" || "$src" = "/root" ]] && { echo -e "\n\033[1;31mDANGEROUS PATH BLOCKED: $src\033[0m"; exit 1; }
   files["$src"]=$(basename "$src")
 done
 
@@ -87,18 +89,18 @@ ssh "$OLD_SERVER" pm2 save
 
 stage $((++CURRENT)) $TOTAL_STAGES "Collecting all data on old server"
 ssh "$OLD_SERVER" bash -c "\
-  rm -rf $REMOTE_TMP && mkdir -p $REMOTE_TMP/pm2 && \
+  rm -rf \"$REMOTE_TMP\" && mkdir -p \"$REMOTE_TMP/pm2\" && \
   $(for src in \"${!dirs[@]}\"; do \
       dest=\"${dirs[$src]}\"; \
-      echo \"rsync -a --delete '\${src%/}/' $REMOTE_TMP/\$dest/ || true && \"; \
+      echo \"rsync -a --delete \\\"${src%/}/\\\" \\\"$REMOTE_TMP/\$dest/\\\" || true && \"; \
     done) \
   $(for src in \"${!files[@]}\"; do \
       dest=\"${files[$src]}\"; \
-      echo \"cp -a '\$src' $REMOTE_TMP/\$dest && \"; \
+      echo \"cp -a \\\"$src\\\" \\\"$REMOTE_TMP/\$dest\\\" && \"; \
     done) \
   cp ~/.pm2/dump.pm2 $REMOTE_TMP/pm2/dump.pm2 2>/dev/null || true && \
   npm ls -g --depth=0 --json > $REMOTE_TMP/global-packages.json \
-    2>/dev/null || echo '{}' > $REMOTE_TMP/global-packages.json && \
+    2>/dev/null || echo '{\"dependencies\":{}}' > $REMOTE_TMP/global-packages.json && \
   tar -czf /tmp/$BUNDLE -C $REMOTE_TMP ."
 
 stage $((++CURRENT)) $TOTAL_STAGES "Creating local backup"
@@ -106,50 +108,48 @@ scp "$OLD_SERVER":/tmp/$BUNDLE "$LOCAL_DIR/"
 echo -e "\nBackup saved → $LOCAL_DIR/$BUNDLE"
 
 stage $((++CURRENT)) $TOTAL_STAGES "Transferring directly OLD → NEW"
-ssh "$OLD_SERVER" cat /tmp/$BUNDLE | \
-  ssh "$NEW_SERVER" sudo tee /tmp/$BUNDLE > /dev/null
+ssh "$OLD_SERVER" cat /tmp/$BUNDLE | ssh "$NEW_SERVER" "cat > /tmp/$BUNDLE"
 
 stage $((++CURRENT)) $TOTAL_STAGES "Installing software on new server"
 ssh "$NEW_SERVER" sudo apt update
 ssh "$NEW_SERVER" sudo apt install -y apache2 nodejs npm jq
 
 stage $((++CURRENT)) $TOTAL_STAGES "Installing PM2 globally"
-ssh "$NEW_SERVER" sudo npm i -g pm2
+ssh "$NEW_SERVER" "npm i -g pm2 --unsafe-perm"
 
 stage $((++CURRENT)) $TOTAL_STAGES "Restoring directories and files (clean replace)"
 ssh "$NEW_SERVER" sudo bash -c "\
-  rm -rf $REMOTE_TMP && mkdir -p $REMOTE_TMP ~/.pm2 && \
-  tar -xzf /tmp/$BUNDLE -C $REMOTE_TMP && \
+  rm -rf \"$REMOTE_TMP\" && mkdir -p \"$REMOTE_TMP\" ~/.pm2 && \
+  tar -xzf /tmp/$BUNDLE -C \"$REMOTE_TMP\" && \
   $(for src in \"${!dirs[@]}\"; do \
       dest=\"${dirs[$src]}\"; \
-      echo \"rm -rf '\$src' && mkdir -p '\$src' && \
-            rsync -a --delete $REMOTE_TMP/\$dest/ '\$src/' || true && \"; \
+      echo \"rsync -a --delete \\\"$REMOTE_TMP/\$dest/\\\" \\\"$src/\\\" && \"; \
     done) \
   $(for src in \"${!files[@]}\"; do \
       dest=\"${files[$src]}\"; \
-      echo \"cp -a $REMOTE_TMP/\$dest '\$src' && \"; \
+      echo \"cp -a \\\"$REMOTE_TMP/\$dest\\\" \\\"$src\\\" && \"; \
     done) \
-  systemctl restart apache2"
+  systemctl restart apache2 || true"
 
 stage $((++CURRENT)) $TOTAL_STAGES "Restoring exact PM2 processes"
-ssh "$NEW_SERVER" sudo bash -c "\
-  cp -f $REMOTE_TMP/pm2/dump.pm2 ~/.pm2/dump.pm2 && \
-  pm2 restore && \
+ssh "$NEW_SERVER" bash -c "\
+  mkdir -p ~/.pm2 && \
+  cp -f \"$REMOTE_TMP/pm2/dump.pm2\" ~/.pm2/dump.pm2 2>/dev/null || true && \
+  pm2 restore || true && \
   pm2 save && \
-  pm2 startup ubuntu -u \$USER | bash"
+  pm2 startup systemd -u \"$NEW_USER\" --hp \"/home/$NEW_USER\" | sudo bash"
 
 stage $((++CURRENT)) $TOTAL_STAGES "Reinstalling global npm packages"
-ssh "$NEW_SERVER" sudo bash -c "\
-  jq -r '.dependencies | keys | @sh' \
-    $REMOTE_TMP/global-packages.json 2>/dev/null | \
-    xargs -r npm i -g --force || true"
+ssh "$NEW_SERVER" bash -c "\
+  jq -r '.dependencies | keys[]' \"$REMOTE_TMP/global-packages.json\" 2>/dev/null | \
+    xargs -r -I {} npm i -g {} --unsafe-perm || true"
 
 # -----------------------------------------------------------------------------
 # 9. Cleanup temporary files
 # -----------------------------------------------------------------------------
 stage $((++CURRENT)) $TOTAL_STAGES "Cleaning up temporary files"
-ssh "$OLD_SERVER" rm -rf $REMOTE_TMP /tmp/$BUNDLE 2>/dev/null || true
-ssh "$NEW_SERVER" sudo rm -f /tmp/$BUNDLE 2>/dev/null || true
+ssh "$OLD_SERVER" rm -rf "$REMOTE_TMP" "/tmp/$BUNDLE" 2>/dev/null || true
+ssh "$NEW_SERVER" sudo rm -rf "$REMOTE_TMP" "/tmp/$BUNDLE" 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # 10. Final success details
