@@ -208,19 +208,7 @@ link_nvm_bin npm
 link_nvm_bin npx
 
 # -----------------------------------------------------------------------------
-# 7. NPM Installation (New Server)
-# -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "NPM Installation (New Server)"
-ssh "$NEW_SERVER" "sudo npm i -g pm2"
-ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
-    \"$REMOTE_TMP/npm-global-packages.json\" | \
-    xargs -r sudo npm i -g"
-ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
-    \"$REMOTE_TMP/npm-root-packages.json\" | \
-    xargs -r sudo npm i -g"
-
-# -----------------------------------------------------------------------------
-# 8. Restore Data (New Server)
+# 7. Restore Data (New Server)
 # -----------------------------------------------------------------------------
 stage $((++CURRENT)) $TOTAL_STAGES "Restore Data (New Server)"
 
@@ -240,6 +228,18 @@ done
 ssh "$NEW_SERVER" "rm -rf \"$REMOTE_TMP\" && mkdir -p \"$REMOTE_TMP\" \"$USER_HOME_NEW/.pm2\""
 ssh "$NEW_SERVER" "tar -xzf /tmp/$BUNDLE -C \"$REMOTE_TMP\""
 ssh "$NEW_SERVER" "bash -c '$RESTORE_CMDS'"
+
+# -----------------------------------------------------------------------------
+# 8. NPM Installation (New Server)
+# -----------------------------------------------------------------------------
+stage $((++CURRENT)) $TOTAL_STAGES "NPM Installation (New Server)"
+ssh "$NEW_SERVER" "sudo npm i -g pm2"
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-global-packages.json\" | \
+    xargs -r sudo npm i -g"
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-root-packages.json\" | \
+    xargs -r npm i --prefix /root"
 
 # -----------------------------------------------------------------------------
 # 9. Restore Processes (New Server)
