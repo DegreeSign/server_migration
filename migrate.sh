@@ -63,7 +63,10 @@ done
 [[ -z "${MIGRATE_FILES//[, ]}" ]] && { echo -e "\nERROR: MIGRATE_FILES cannot be empty"; exit 1; }
 IFS=',' read -ra RAW_DIRS <<< "$MIGRATE_DIRS"
 IFS=',' read -ra RAW_FILES <<< "$MIGRATE_FILES"
+
 declare -A dirs files
+
+# get directories list
 for i in "${!RAW_DIRS[@]}"; do
   src="${RAW_DIRS[$i]#"${RAW_DIRS[$i]%%[![:space:]]*}"}"
   src="${src%"${src##*[![:space:]]}"}"
@@ -74,6 +77,8 @@ for i in "${!RAW_DIRS[@]}"; do
   }
   dirs["$src"]="dir_$i"
 done
+
+# get files list
 for i in "${!RAW_FILES[@]}"; do
   src="${RAW_FILES[$i]#"${RAW_FILES[$i]%%[![:space:]]*}"}"
   src="${src%"${src##*[![:space:]]}"}"
@@ -81,6 +86,8 @@ for i in "${!RAW_FILES[@]}"; do
   [[ "$src" != /* ]] && { echo -e "\nERROR: File path must be absolute: $src"; exit 1; }
   files["$src"]=$(basename -- "$src")
 done
+
+# Validate directories and files exist
 (( ${#dirs[@]} == 0 )) && { echo -e "\nERROR: No valid directories to migrate"; exit 1; }
 (( ${#files[@]} == 0 && ${#dirs[@]} == 0 )) && { echo -e "\nERROR: Nothing to migrate"; exit 1; }
 
@@ -102,6 +109,7 @@ LOCAL_DIR="migration_data"
 REMOTE_TMP="/tmp/migration"
 BUNDLE="migration-bundle.tar.gz"
 ssh "$OLD_SERVER" rm -rf "$REMOTE_TMP"
+ssh "$OLD_SERVER" mkdir -p "$REMOTE_TMP/pm2"
 
 # Directories backup
 for src in "${!dirs[@]}"; do
@@ -122,7 +130,6 @@ for src in "${!files[@]}"; do
 done
 
 # PM2 saved
-ssh "$OLD_SERVER" mkdir -p "$REMOTE_TMP/pm2"
 ssh "$OLD_SERVER" pm2 save
 ssh "$OLD_SERVER" "cp -a \"$USER_HOME_OLD/.pm2/dump.pm2\" \
     \"$REMOTE_TMP/pm2/\" 2>/dev/null || true"
