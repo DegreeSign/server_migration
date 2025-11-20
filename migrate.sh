@@ -20,12 +20,8 @@
 
 set -euo pipefail
 
-# Record start time
-START_TIME=$(date +%s)
-echo "Migration started at: $(date '+%Y-%m-%d %H:%M:%S')"
-
 # -----------------------------------------------------------------------------
-# Progress bar
+# 0. Stages setup
 # -----------------------------------------------------------------------------
 progress_bar() {
   local current=$1 total=$2 text=$3
@@ -39,49 +35,35 @@ progress_bar() {
   printf "] %3d%% (%d/%d) %s" "$percent" "$current" "$total" "$text"
   echo ""
 }
-
 stage() {
   local num=$1 total=$2 name=$3
   echo -e "\n\033[1;36mSTAGE $num/$total: $name\033[0m"
   progress_bar "$num" "$total" "$name"
 }
-
 TOTAL_STAGES=10
 CURRENT=0
 
 # -----------------------------------------------------------------------------
-# 1. Load configuration
+# 1. Migration Start
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Loading configuration from .env"
-[[ -f .env ]] && source .env || { echo "No .env file found"; exit 1; }
+stage $((++CURRENT)) $TOTAL_STAGES "Migration Start"
 
+# Record start time
+START_TIME=$(date +%s)
+echo "Migration started at: $(date '+%Y-%m-%d %H:%M:%S')"
+
+# Parse ENV
+[[ -f .env ]] && source .env || { echo "No .env file found"; exit 1; }
 for var in OLD_USER OLD_IP NEW_USER NEW_IP MIGRATE_DIRS MIGRATE_FILES; do
   [[ -z "${!var:-}" ]] && { echo -e "\nERROR: $var is required in .env"; exit 1; }
 done
 
+# Parse Paths (directories/files)
 [[ -z "${MIGRATE_DIRS//[, ]}" ]] && { echo -e "\nERROR: MIGRATE_DIRS cannot be empty"; exit 1; }
 [[ -z "${MIGRATE_FILES//[, ]}" ]] && { echo -e "\nERROR: MIGRATE_FILES cannot be empty"; exit 1; }
-
-# Login paths
-OLD_SERVER="${OLD_USER}@${OLD_IP}"
-NEW_SERVER="${NEW_USER}@${NEW_IP}"
-
-# Defined directories
-LOCAL_DIR="migration_data"
-REMOTE_TMP="/tmp/migration"
-BUNDLE="migration-bundle.tar.gz"
-
-# Home directories
-USER_HOME_OLD=$(ssh "$OLD_SERVER" "getent passwd \"$OLD_USER\" | cut -d: -f6")
-USER_HOME_NEW=$(ssh "$NEW_SERVER" "getent passwd \"$NEW_USER\" | cut -d: -f6")
-
-mkdir -p "$LOCAL_DIR"
-
 IFS=',' read -ra RAW_DIRS <<< "$MIGRATE_DIRS"
 IFS=',' read -ra RAW_FILES <<< "$MIGRATE_FILES"
-
 declare -A dirs files
-
 for i in "${!RAW_DIRS[@]}"; do
   src="${RAW_DIRS[$i]#"${RAW_DIRS[$i]%%[![:space:]]*}"}"
   src="${src%"${src##*[![:space:]]}"}"
@@ -92,7 +74,6 @@ for i in "${!RAW_DIRS[@]}"; do
   }
   dirs["$src"]="dir_$i"
 done
-
 for i in "${!RAW_FILES[@]}"; do
   src="${RAW_FILES[$i]#"${RAW_FILES[$i]%%[![:space:]]*}"}"
   src="${src%"${src##*[![:space:]]}"}"
@@ -100,52 +81,53 @@ for i in "${!RAW_FILES[@]}"; do
   [[ "$src" != /* ]] && { echo -e "\nERROR: File path must be absolute: $src"; exit 1; }
   files["$src"]=$(basename -- "$src")
 done
-
 (( ${#dirs[@]} == 0 )) && { echo -e "\nERROR: No valid directories to migrate"; exit 1; }
 (( ${#files[@]} == 0 && ${#dirs[@]} == 0 )) && { echo -e "\nERROR: Nothing to migrate"; exit 1; }
 
-# -----------------------------------------------------------------------------
-# 2. Save PM2 state
-# -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Saving PM2 state on old server"
-ssh "$OLD_SERVER" pm2 save
+# Login paths
+OLD_SERVER="${OLD_USER}@${OLD_IP}"
+NEW_SERVER="${NEW_USER}@${NEW_IP}"
+
+# Home directories
+USER_HOME_OLD=$(ssh "$OLD_SERVER" "getent passwd \"$OLD_USER\" | cut -d: -f6")
+USER_HOME_NEW=$(ssh "$NEW_SERVER" "getent passwd \"$NEW_USER\" | cut -d: -f6")
 
 # -----------------------------------------------------------------------------
-# 3. Collecting all data on old server
+# 2. Data Collection (Old Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Collecting all data on old server"
+stage $((++CURRENT)) $TOTAL_STAGES "Data Backup (Old Server)"
 
-# Validate jq
-ssh "$OLD_SERVER" command -v jq >/dev/null 2>&1 || {
-  echo -e "\nInstalling jq on old server..."
-  ssh "$OLD_SERVER" "sudo apt update && sudo apt install -y jq"
-}
-
+# Defined directories
+LOCAL_DIR="migration_data"
+REMOTE_TMP="/tmp/migration"
+BUNDLE="migration-bundle.tar.gz"
 ssh "$OLD_SERVER" rm -rf "$REMOTE_TMP"
-ssh "$OLD_SERVER" mkdir -p "$REMOTE_TMP/pm2"
 
+# Directories backup
 for src in "${!dirs[@]}"; do
   dest="${dirs[$src]}"
-  echo -e "\nCopying directory: $src → temporary bundle ($dest)"
   if [[ "$src" = */ ]]; then
     ssh "$OLD_SERVER" rsync -aHAX --delete --numeric-ids "$src" "$REMOTE_TMP/$dest/"
   else
     ssh "$OLD_SERVER" rsync -aHAX --delete --numeric-ids "$src/" "$REMOTE_TMP/$dest/"
   fi
-  echo "Completed: $src"
+  echo "Backup done: $src"
 done
 
+# Files backup
 for src in "${!files[@]}"; do
   dest="${files[$src]}"
-  echo -e "\nCopying file: $src → temporary bundle ($dest)"
   ssh "$OLD_SERVER" cp -a "$src" "$REMOTE_TMP/$dest"
-  echo "Completed: $src"
+  echo "Backup done: $src"
 done
 
+# PM2 saved
+ssh "$OLD_SERVER" mkdir -p "$REMOTE_TMP/pm2"
+ssh "$OLD_SERVER" pm2 save
 ssh "$OLD_SERVER" "cp -a \"$USER_HOME_OLD/.pm2/dump.pm2\" \
     \"$REMOTE_TMP/pm2/\" 2>/dev/null || true"
 
-# Capture global npm packages
+# NPM Backup
 echo ""
 echo "Capturing npm packages..."
 GLOBAL_PKGS="$REMOTE_TMP/npm-global-packages.json"
@@ -160,33 +142,33 @@ else
     ssh "$OLD_SERVER" echo '{\"dependencies\":{}}' > "$ROOT_PKGS"
 fi
 
-# Compression process
-echo -e "\nBundling data in $REMOTE_TMP ..."
+# -----------------------------------------------------------------------------
+# 3. Data Compression (Old Server)
+# -----------------------------------------------------------------------------
+stage $((++CURRENT)) $TOTAL_STAGES "Data Compression (Old Server)"
 SIZE_HUMAN=$(ssh "$OLD_SERVER" du -sh "$REMOTE_TMP" | cut -f1)
 echo -e "Total data to compress: $SIZE_HUMAN"
-echo -e "Starting compression..."
-echo -e "Compressing all data — this may take a while. Please wait..."
-
+echo -e "Compressing all data may take a while. Please wait..."
 ssh "$OLD_SERVER" tar --numeric-owner -czf /tmp/"$BUNDLE" -C "$REMOTE_TMP" .
 echo -e "\nCompression complete → /tmp/$BUNDLE ready"
 
 # -----------------------------------------------------------------------------
-# 4. Creating local backup
+# 4. Data Download (Old Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Creating local backup"
-
-echo "Downloading backup from old server..."
+stage $((++CURRENT)) $TOTAL_STAGES "Data Download (Old Server)"
+echo "Downloading data from old server..."
+mkdir -p "$LOCAL_DIR"
 if ! rsync -avh --progress "$OLD_SERVER:/tmp/$BUNDLE" "$LOCAL_DIR/$BUNDLE"; then
   echo -e "\nFirst attempt failed — retrying once..."
   sleep 3
   rsync -avh --progress "$OLD_SERVER:/tmp/$BUNDLE" "$LOCAL_DIR/$BUNDLE"
 fi
-echo -e "\nBackup saved → $LOCAL_DIR/$BUNDLE"
+echo -e "\nData saved → $LOCAL_DIR/$BUNDLE"
 
 # -----------------------------------------------------------------------------
-# 5. Upload bundle to new server
+# 5. Data Upload (New Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Uploading files to new server"
+stage $((++CURRENT)) $TOTAL_STAGES "Data Upload (New Server)"
 if ! rsync -ah --info=progress2 \
            "$LOCAL_DIR/$BUNDLE" \
            "$NEW_SERVER:/tmp/$BUNDLE"; then
@@ -196,12 +178,12 @@ if ! rsync -ah --info=progress2 \
           "$LOCAL_DIR/$BUNDLE" \
           "$NEW_SERVER:/tmp/$BUNDLE"
 fi
-echo 'Upload completed'
+echo 'Data upload completed'
 
 # -----------------------------------------------------------------------------
-# 6. Install base software on new server
+# 6. Softwares Installation (New Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Installing software on new server"
+stage $((++CURRENT)) $TOTAL_STAGES "Softwares Installation (New Server)"
 
 # Apache + jq
 ssh "$NEW_SERVER" sudo apt update
@@ -226,9 +208,9 @@ link_nvm_bin npm
 link_nvm_bin npx
 
 # -----------------------------------------------------------------------------
-# 7. Install npm packages on new server
+# 7. NPM Installation (New Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Installing npm packages on new server"
+stage $((++CURRENT)) $TOTAL_STAGES "NPM Installation (New Server)"
 ssh "$NEW_SERVER" "sudo npm i -g pm2"
 ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
     \"$REMOTE_TMP/npm-global-packages.json\" | \
@@ -238,9 +220,9 @@ ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
     xargs -r sudo npm i -g"
 
 # -----------------------------------------------------------------------------
-# 8. Restore directories/files
+# 8. Restore Data (New Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Restoring directories and files"
+stage $((++CURRENT)) $TOTAL_STAGES "Restore Data (New Server)"
 
 # Prepare commands
 RESTORE_CMDS=""
@@ -260,9 +242,9 @@ ssh "$NEW_SERVER" "tar -xzf /tmp/$BUNDLE -C \"$REMOTE_TMP\""
 ssh "$NEW_SERVER" "bash -c '$RESTORE_CMDS'"
 
 # -----------------------------------------------------------------------------
-# 9. Restore processes
+# 9. Restore Processes (New Server)
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Restoring processes"
+stage $((++CURRENT)) $TOTAL_STAGES "Restore Processes (New Server)"
 ssh "$NEW_SERVER" "systemctl restart apache2 || true"
 ssh "$NEW_SERVER" "mkdir -p \"$USER_HOME_NEW/.pm2\""
 ssh "$NEW_SERVER" "cp -f \"$REMOTE_TMP/pm2/dump.pm2\" \"$USER_HOME_NEW/.pm2/dump.pm2\" 2>/dev/null || true"
@@ -271,9 +253,9 @@ ssh "$NEW_SERVER" "su - \"$NEW_USER\" -c 'pm2 resurrect || true'"
 ssh "$NEW_SERVER" "su - \"$NEW_USER\" -c 'pm2 save'"
 
 # -----------------------------------------------------------------------------
-# 10. Finalisation
+# 10. Finalising Migration
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Finalising migration"
+stage $((++CURRENT)) $TOTAL_STAGES "Finalising Migration"
 
 # Cleanup
 ssh "$OLD_SERVER" rm -rf "$REMOTE_TMP" "/tmp/$BUNDLE" 2>/dev/null || true
@@ -296,7 +278,7 @@ fi
 # Final Summary
 progress_bar $TOTAL_STAGES $TOTAL_STAGES "COMPLETE"
 echo "MIGRATION COMPLETED SUCCESSFULLY!"
-echo "Thank God 🤲🏻"
+echo "Thank God 🤲"
 echo "   • All paths migrated"
 echo "   • Apache restarted"
 echo "   • PM2 restored"

@@ -8,6 +8,7 @@ Migrates everything safely and exactly:
 - SSL certificates
 - PM2 apps (original paths preserved via `dump.pm2`)
 - Global npm packages
+- 10 automated steps
 
 License: Apache-2.0 [LICENSE](LICENSE)
 
