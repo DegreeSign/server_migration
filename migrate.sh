@@ -22,7 +22,7 @@ set -euo pipefail
 
 # Record start time
 START_TIME=$(date +%s)
-echo "\nMigration started at: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "Migration started at: $(date '+%Y-%m-%d %H:%M:%S')"
 
 # -----------------------------------------------------------------------------
 # Progress bar
@@ -46,7 +46,7 @@ stage() {
   progress_bar "$num" "$total" "$name"
 }
 
-TOTAL_STAGES=11
+TOTAL_STAGES=10
 CURRENT=0
 
 # -----------------------------------------------------------------------------
@@ -62,12 +62,18 @@ done
 [[ -z "${MIGRATE_DIRS//[, ]}" ]] && { echo -e "\nERROR: MIGRATE_DIRS cannot be empty"; exit 1; }
 [[ -z "${MIGRATE_FILES//[, ]}" ]] && { echo -e "\nERROR: MIGRATE_FILES cannot be empty"; exit 1; }
 
+# Login paths
 OLD_SERVER="${OLD_USER}@${OLD_IP}"
 NEW_SERVER="${NEW_USER}@${NEW_IP}"
 
+# Defined directories
 LOCAL_DIR="migration_data"
 REMOTE_TMP="/tmp/migration"
 BUNDLE="migration-bundle.tar.gz"
+
+# Home directories
+USER_HOME_OLD=$(ssh "$OLD_SERVER" "getent passwd \"$OLD_USER\" | cut -d: -f6")
+USER_HOME_NEW=$(ssh "$NEW_SERVER" "getent passwd \"$NEW_USER\" | cut -d: -f6")
 
 mkdir -p "$LOCAL_DIR"
 
@@ -136,7 +142,8 @@ for src in "${!files[@]}"; do
   echo "Completed: $src"
 done
 
-ssh "$OLD_SERVER" cp -a ~/.pm2/dump.pm2 "$REMOTE_TMP/pm2/" 2>/dev/null || true
+ssh "$OLD_SERVER" "cp -a \"$USER_HOME_OLD/.pm2/dump.pm2\" \
+    \"$REMOTE_TMP/pm2/\" 2>/dev/null || true"
 
 # Capture global npm packages
 echo ""
@@ -179,8 +186,7 @@ echo -e "\nBackup saved → $LOCAL_DIR/$BUNDLE"
 # -----------------------------------------------------------------------------
 # 5. Upload bundle to new server
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Transferring directly OLD to NEW"
-echo 'Uploading bundle from local backup to new server...'
+stage $((++CURRENT)) $TOTAL_STAGES "Uploading files to new server"
 if ! rsync -ah --info=progress2 \
            "$LOCAL_DIR/$BUNDLE" \
            "$NEW_SERVER:/tmp/$BUNDLE"; then
@@ -196,21 +202,47 @@ echo 'Upload completed'
 # 6. Install base software on new server
 # -----------------------------------------------------------------------------
 stage $((++CURRENT)) $TOTAL_STAGES "Installing software on new server"
+
+# Apache + jq
 ssh "$NEW_SERVER" sudo apt update
-ssh "$NEW_SERVER" sudo apt install -y apache2 nodejs npm jq
+ssh "$NEW_SERVER" sudo apt install -y apache2 jq curl
+
+# Node.js
+NODE_VERSION="${NODE_VERSION:-24}"
+run_nvm() {
+  ssh "$NEW_SERVER" "export LC_ALL=C NVM_DIR=\"$USER_HOME_NEW/.nvm\" && \
+    [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && $*"
+}
+link_nvm_bin() {
+  run_nvm "sudo ln -sf \"\$(nvm which current | xargs dirname)/$1\" /usr/bin/$1"
+}
+ssh "$NEW_SERVER" "export NVM_DIR=\"$USER_HOME_NEW/.nvm\" && [ -d \"\$NVM_DIR\" ] || \
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
+run_nvm "nvm install $NODE_VERSION"
+run_nvm "nvm alias default $NODE_VERSION"
+run_nvm "nvm use $NODE_VERSION"
+link_nvm_bin node
+link_nvm_bin npm
+link_nvm_bin npx
 
 # -----------------------------------------------------------------------------
-# 7. Install PM2 globally
+# 7. Install npm packages on new server
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Installing PM2 globally"
-ssh "$NEW_SERVER" "sudo npm i -g pm2 --unsafe-perm=true"
+stage $((++CURRENT)) $TOTAL_STAGES "Installing npm packages on new server"
+ssh "$NEW_SERVER" "sudo npm i -g pm2"
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-global-packages.json\" | \
+    xargs -r sudo npm i -g"
+ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
+    \"$REMOTE_TMP/npm-root-packages.json\" | \
+    xargs -r sudo npm i -g"
 
 # -----------------------------------------------------------------------------
-# 8. Restore directories/files — paths restored exactly as defined
+# 8. Restore directories/files
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Restoring directories and files (clean replace)"
-USER_HOME=$(ssh "$NEW_SERVER" "getent passwd \"$NEW_USER\" | cut -d: -f6")
+stage $((++CURRENT)) $TOTAL_STAGES "Restoring directories and files"
 
+# Prepare commands
 RESTORE_CMDS=""
 for src in "${!dirs[@]}"; do
   dest="${dirs[$src]}"
@@ -222,42 +254,28 @@ for src in "${!files[@]}"; do
   RESTORE_CMDS+="cp -a \"$REMOTE_TMP/$dest\" \"$src\" || true; "
 done
 
-ssh "$NEW_SERVER" sudo bash << EOF
-set -euo pipefail
-rm -rf "$REMOTE_TMP" && mkdir -p "$REMOTE_TMP" "$USER_HOME/.pm2"
-tar -xzf /tmp/$BUNDLE -C "$REMOTE_TMP"
-$RESTORE_CMDS
-systemctl restart apache2 || true
-EOF
+# Extract directories and files into place
+ssh "$NEW_SERVER" "rm -rf \"$REMOTE_TMP\" && mkdir -p \"$REMOTE_TMP\" \"$USER_HOME_NEW/.pm2\""
+ssh "$NEW_SERVER" "tar -xzf /tmp/$BUNDLE -C \"$REMOTE_TMP\""
+ssh "$NEW_SERVER" "bash -c '$RESTORE_CMDS'"
 
 # -----------------------------------------------------------------------------
-# 9. Install npm packages
+# 9. Restore processes
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Reinstalling npm packages"
-ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
-    \"$REMOTE_TMP/npm-global-packages.json\" | \
-    xargs -r sudo npm i -g --unsafe-perm"
-ssh "$NEW_SERVER" "jq -r '.dependencies | keys[]?' \
-    \"$REMOTE_TMP/npm-root-packages.json\" | \
-    xargs -r sudo npm i -g --unsafe-perm"
+stage $((++CURRENT)) $TOTAL_STAGES "Restoring processes"
+ssh "$NEW_SERVER" "systemctl restart apache2 || true"
+ssh "$NEW_SERVER" "mkdir -p \"$USER_HOME_NEW/.pm2\""
+ssh "$NEW_SERVER" "cp -f \"$REMOTE_TMP/pm2/dump.pm2\" \"$USER_HOME_NEW/.pm2/dump.pm2\" 2>/dev/null || true"
+ssh "$NEW_SERVER" "chown -R \"$NEW_USER:\" \"$USER_HOME_NEW/.pm2\""
+ssh "$NEW_SERVER" "su - \"$NEW_USER\" -c 'pm2 resurrect || true'"
+ssh "$NEW_SERVER" "su - \"$NEW_USER\" -c 'pm2 save'"
 
 # -----------------------------------------------------------------------------
-# 10. Restore PM2 processes
+# 10. Finalisation
 # -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Restoring exact PM2 processes"
-ssh "$NEW_SERVER" bash << EOF
-mkdir -p "$USER_HOME/.pm2"
-cp -f "$REMOTE_TMP/pm2/dump.pm2" "$USER_HOME/.pm2/dump.pm2" 2>/dev/null || true
-chown -R "$NEW_USER:" "$USER_HOME/.pm2"
-sudo -u "$NEW_USER" pm2 restore || true
-sudo -u "$NEW_USER" pm2 save
-sudo -u "$NEW_USER" pm2 startup systemd -u "$NEW_USER" --hp "$USER_HOME" | sudo bash
-EOF
+stage $((++CURRENT)) $TOTAL_STAGES "Finalising migration"
 
-# -----------------------------------------------------------------------------
-# 11. Cleanup
-# -----------------------------------------------------------------------------
-stage $((++CURRENT)) $TOTAL_STAGES "Cleaning up temporary files"
+# Cleanup
 ssh "$OLD_SERVER" rm -rf "$REMOTE_TMP" "/tmp/$BUNDLE" 2>/dev/null || true
 ssh "$NEW_SERVER" rm -rf "$REMOTE_TMP" "/tmp/$BUNDLE" 2>/dev/null || true
 
@@ -275,9 +293,7 @@ else
     TIME_TAKEN="$HOURS hours, $MINUTES minutes, and $SECONDS seconds"
 fi
 
-# -----------------------------------------------------------------------------
 # Final Summary
-# -----------------------------------------------------------------------------
 progress_bar $TOTAL_STAGES $TOTAL_STAGES "COMPLETE"
 echo "MIGRATION COMPLETED SUCCESSFULLY!"
 echo "Thank God 🤲🏻"

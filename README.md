@@ -35,6 +35,9 @@ IMPORTANT:
 * REVIEW AND UPDATE REQUIRED BEFORE USE
 
 ```env
+# Node.js
+NODE_VERSION=24
+
 # SSH details
 OLD_USER='old_username'
 OLD_IP='0.0.0.0'
